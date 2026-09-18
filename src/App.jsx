@@ -1,112 +1,195 @@
-import { useEffect, useState } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
-import { Toaster } from 'react-hot-toast'
-import Auth from './components/Auth'
-import RoleSelector from './components/RoleSelector'
-import Tickets from './components/Tickets'
-import UserLogin from './components/UserLogin'
+import { useState } from "react";
+import axios from "axios";
+import { loadStripe } from "@stripe/stripe-js";
+import {
+    Elements,
+    PaymentElement,
+    useElements,
+    useStripe,
+} from "@stripe/react-stripe-js";
 
-const getStoredUser = () => {
-  try {
-    const raw = localStorage.getItem('user')
-    return raw ? JSON.parse(raw) : null
-  } catch {
-    return null
-  }
-}
+const stripePromise = loadStripe(
+    import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY
+);
 
-const Dashboard = () => {
-  const [user, setUser] = useState(getStoredUser())
+const CheckoutForm = () => {
+    const stripe = useStripe();
+    const elements = useElements();
 
-  useEffect(() => {
-    const handleStorage = () => setUser(getStoredUser())
-    window.addEventListener('storage', handleStorage)
-    return () => window.removeEventListener('storage', handleStorage)
-  }, [])
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [errorMessage, setErrorMessage] = useState("");
 
-  const handleLogout = () => {
-    localStorage.removeItem('accessToken')
-    localStorage.removeItem('tokenType')
-    localStorage.removeItem('userRole')
-    localStorage.removeItem('user')
-    setUser(null)
-    window.location.href = '/'
-  }
+    const handleSubmit = async (event) => {
+        event.preventDefault();
 
-  return (
-    <div className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 lg:px-8">
-        <div className="mb-8 flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl shadow-slate-950/30">
-          <div>
-            <p className="text-sm uppercase tracking-[0.2em] text-cyan-400">Socket test app</p>
-            <h1 className="mt-2 text-3xl font-bold">Dashboard</h1>
-          </div>
+        if (!stripe || !elements) {
+            return;
+        }
 
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-sm font-medium text-slate-100 transition hover:border-cyan-500 hover:text-cyan-300"
-          >
-            Logout
-          </button>
-        </div>
+        try {
+            setIsProcessing(true);
+            setErrorMessage("");
 
-        <div className="grid gap-6 md:grid-cols-3">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-            <p className="text-sm text-slate-400">User</p>
-            <p className="mt-3 text-2xl font-semibold">{user?.fullName || user?.name || user?.role || 'Demo User'}</p>
-          </div>
+            const { error } = await stripe.confirmPayment({
+                elements,
+                confirmParams: {
+                    return_url: `${window.location.origin}/payment-success`,
+                },
+            });
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-            <p className="text-sm text-slate-400">Role</p>
-            <p className="mt-3 text-xl font-medium text-cyan-300 capitalize">{user?.role || 'customer'}</p>
-          </div>
+            if (error) {
+                setErrorMessage(
+                    error.message || "Payment confirmation failed."
+                );
+            }
+        } catch (error) {
+            setErrorMessage(
+                error.message || "Something went wrong."
+            );
+        } finally {
+            setIsProcessing(false);
+        }
+    };
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-            <p className="text-sm text-slate-400">Token status</p>
-            <p className="mt-3 inline-flex items-center rounded-full bg-emerald-500/15 px-3 py-1 text-sm font-medium text-emerald-300">
-              Active
-            </p>
-          </div>
-        </div>
+    return (
+        <form onSubmit={handleSubmit} className="space-y-6">
+            <PaymentElement />
 
-        <div className="mt-8 rounded-2xl border border-slate-800 bg-slate-900 p-6">
-          <h2 className="text-xl font-semibold">Authenticated</h2>
-          <p className="mt-3 text-slate-300">
-            You are now logged in and can use the protected APIs with the bearer token saved in localStorage.
-          </p>
-        </div>
-      </div>
-    </div>
-  )
-}
+            {errorMessage && (
+                <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                    {errorMessage}
+                </div>
+            )}
 
-const ProtectedRoute = ({ children }) => {
-  const token = localStorage.getItem('accessToken')
-  return token ? children : <Navigate to="/" replace />
-}
+            <button
+                type="submit"
+                disabled={!stripe || !elements || isProcessing}
+                className="w-full rounded-lg bg-indigo-600 px-4 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+                {isProcessing
+                    ? "Processing payment..."
+                    : "Pay $50.00"}
+            </button>
+        </form>
+    );
+};
 
 const App = () => {
-  return (
-    <BrowserRouter>
-      <Toaster position="top-right" toastOptions={{ duration: 4000 }} />
-      <Routes>
-        <Route path="/" element={<RoleSelector />} />
-        <Route path="/customer-login" element={<Auth />} />
-        <Route path="/user-login" element={<UserLogin />} />
-        <Route path="/tickets" element={<ProtectedRoute><Tickets /></ProtectedRoute>} />
-        <Route
-          path="/dashboard"
-          element={
-            <ProtectedRoute>
-              <Dashboard />
-            </ProtectedRoute>
-          }
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
-  )
-}
+    const [clientSecret, setClientSecret] = useState("");
+    const [isCreatingPayment, setIsCreatingPayment] = useState(false);
+    const [errorMessage, setErrorMessage] = useState("");
 
-export default App
+    const createPaymentIntent = async () => {
+        try {
+            setIsCreatingPayment(true);
+            setErrorMessage("");
+
+            const { data } = await axios.post(
+                `${import.meta.env.VITE_API_URL}/api/v1/stripe-intent/payment-intent`,
+                {
+                    amount: 5000,
+                }
+            );
+
+            if (!data.success) {
+                throw new Error(
+                    data.message || "Unable to create payment intent."
+                );
+            }
+
+            setClientSecret(data.data.clientSecret);
+        } catch (error) {
+            const message =
+                error.response?.data?.message ||
+                error.message ||
+                "Unable to create payment intent.";
+
+            setErrorMessage(message);
+        } finally {
+            setIsCreatingPayment(false);
+        }
+    };
+
+    const stripeOptions = {
+        clientSecret,
+        appearance: {
+            theme: "stripe",
+            variables: {
+                colorPrimary: "#4f46e5",
+                borderRadius: "8px",
+            },
+        },
+    };
+
+    return (
+        <main className="min-h-screen bg-slate-100 px-4 py-10">
+            <div className="mx-auto max-w-lg">
+                <div className="mb-8 text-center">
+                    <p className="mb-2 text-sm font-semibold uppercase tracking-wider text-indigo-600">
+                        Stripe Demo
+                    </p>
+
+                    <h1 className="text-3xl font-bold text-slate-900">
+                        Complete your payment
+                    </h1>
+
+                    <p className="mt-3 text-slate-600">
+                        This is a test payment using Stripe Sandbox.
+                    </p>
+                </div>
+
+                <section className="rounded-2xl bg-white p-6 shadow-lg sm:p-8">
+                    <div className="mb-6 flex items-center justify-between border-b border-slate-200 pb-5">
+                        <div>
+                            <h2 className="text-lg font-semibold text-slate-900">
+                                Demo Product
+                            </h2>
+
+                            <p className="mt-1 text-sm text-slate-500">
+                                Test product payment
+                            </p>
+                        </div>
+
+                        <p className="text-2xl font-bold text-slate-900">
+                            $50.00
+                        </p>
+                    </div>
+
+                    {!clientSecret && (
+                        <button
+                            type="button"
+                            onClick={createPaymentIntent}
+                            disabled={isCreatingPayment}
+                            className="w-full rounded-lg bg-indigo-600 px-4 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            {isCreatingPayment
+                                ? "Preparing payment..."
+                                : "Start payment"}
+                        </button>
+                    )}
+
+                    {errorMessage && (
+                        <div className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                            {errorMessage}
+                        </div>
+                    )}
+
+                    {clientSecret && (
+                        <Elements
+                            options={stripeOptions}
+                            stripe={stripePromise}
+                        >
+                            <CheckoutForm />
+                        </Elements>
+                    )}
+                </section>
+
+                <p className="mt-5 text-center text-xs text-slate-500">
+                    Payments are processed in Stripe test mode.
+                </p>
+            </div>
+        </main>
+    );
+};
+
+export default App;
